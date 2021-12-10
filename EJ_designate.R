@@ -114,17 +114,28 @@ maACS19_blkgrp <- maACS19_blkgrp %>%
   mutate(EJ_ELIMINATE = if_else(EJ == "Yes" & 
                                   BG_PCTMAHHI > 125 & 
                                   pct_college > 50 & 
-                                  (P_PM25 < 75 | P_OZONE < 75 | P_DSLPM < 75 | 
-                                     P_CANCR < 75 | P_RESP < 75 | 
-                                     P_PTRAF < 75 | P_LDPNT < 75 | 
-                                     P_PNPL < 75 | P_PRMP < 75 | 
-                                     P_PTSDF < 75 | P_PWDIS < 75), 
+                                  (P_PM25 < 90 & P_OZONE < 90 & 
+                                     P_DSLPM < 90 & P_CANCR < 90 & 
+                                     P_RESP < 90 & P_PTRAF < 90 & 
+                                     P_LDPNT < 90 & P_PWDIS < 90), 
                                 "Eliminate?", " "))
 
 # How many potentially eliminated?
 maACS19_blkgrp %>% filter(EJ_ELIMINATE == "Eliminate?") %>% nrow()
 
 # Look more closely at certain municipalities
+# How many EJ BGs in Arlington?
+maACS19_blkgrp %>% 
+  as.data.frame() %>% 
+  filter(TOWN == "Arlington" & EJ == "Yes") %>%
+  nrow()
+
+# How many Arlington EJ BGs would be eliminated?
+maACS19_blkgrp %>% 
+  as.data.frame() %>% 
+  filter(TOWN == "Arlington" & EJ_ELIMINATE == "Eliminate?") %>%
+  nrow()
+
 maACS19_blkgrp %>% 
   as.data.frame() %>% 
   filter(TOWN == "Arlington") %>% 
