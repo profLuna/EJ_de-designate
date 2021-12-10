@@ -94,3 +94,47 @@ maACS19_blkgrp %>%
   tm_shape(.) + tm_fill(col = "red", alpha = 0.5)
 
 
+# Bring in EJSCREEN data to identify BGs that "not bear an unfair burden of environmental pollution"
+download.file(url = "https://gaftp.epa.gov/EJSCREEN/2020/EJSCREEN_2020_StatePctile.csv.zip", 
+              destfile = "EJSCREEN_2020_StatePctile.csv.zip")
+
+unzip("EJSCREEN_2020_StatePctile.csv.zip")
+
+EJSCREEN_2020_StatePctile <- read_csv("EJSCREEN_2020_StatePctile.csv") %>% 
+  filter(STATE_NAME == "Massachusetts") %>% 
+  select(ID, P_PM25, P_OZONE, P_DSLPM, P_CANCR, P_RESP, P_PTRAF, P_LDPNT,
+         P_PNPL, P_PRMP, P_PTSDF, P_PWDIS)
+
+# join to maACS block groups
+maACS19_blkgrp <- maACS19_blkgrp %>% 
+  left_join(., EJSCREEN_2020_StatePctile, by = c("GEOID.x" = "ID"))
+
+# identify areas that meet EJ de-designation criteria, assuming 'unfair burden of environmental pollution' to mean greater than 50th percentile for any given type of pollution
+maACS19_blkgrp <- maACS19_blkgrp %>% 
+  mutate(EJ_ELIMINATE = if_else(EJ == "Yes" & 
+                                  BG_PCTMAHHI > 125 & 
+                                  pct_college > 50 & 
+                                  (P_PM25 < 75 | P_OZONE < 75 | P_DSLPM < 75 | 
+                                     P_CANCR < 75 | P_RESP < 75 | 
+                                     P_PTRAF < 75 | P_LDPNT < 75 | 
+                                     P_PNPL < 75 | P_PRMP < 75 | 
+                                     P_PTSDF < 75 | P_PWDIS < 75), 
+                                "Eliminate?", " "))
+
+# How many potentially eliminated?
+maACS19_blkgrp %>% filter(EJ_ELIMINATE == "Eliminate?") %>% nrow()
+
+# Look more closely at certain municipalities
+maACS19_blkgrp %>% 
+  as.data.frame() %>% 
+  filter(TOWN == "Arlington") %>% 
+  select(P_PM25, P_OZONE, P_DSLPM, P_CANCR, P_RESP, P_PTRAF, P_LDPNT, P_PNPL,
+         P_PRMP, P_PTSDF, P_PWDIS) %>%
+  head(50)
+
+# map it out
+library(tmap)
+tmap_mode("view")
+maACS19_blkgrp %>% 
+  filter(EJ_ELIMINATE == "Eliminate?") %>% 
+  tm_shape(.) + tm_fill(col = "red", alpha = 0.6)
