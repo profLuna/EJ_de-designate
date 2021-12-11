@@ -1,22 +1,23 @@
 ---
-title: "EJ De-designation exploration"
+title: "Environmental Justice Community De-designation Analysis"
 author: "Marcos Luna"
 date: "`r Sys.Date()`"
-output: html_document
+output: 
+  html_document:
+    theme: readable
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
 library(tidyverse)
 library(tidycensus)
 library(sf)
 library(tigris)
-library(kableExtra)
 library(leaflet)
 library(leaflet.extras)
 library(gplots)
+```
 
+```{r data, cache=TRUE, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
 # download variables at block group level for Massachusetts
 maACS19_blkgrp <- get_acs(geography = "block group", 
                           variables = c(totalpop = "B03002_001", 
@@ -137,8 +138,6 @@ EJBGdedesigDF <- left_join(EJBGdedesigTown, EJBGcountTown, by = "TOWN") %>%
   select(TOWN, EJBGcount, EJdedesigBGcount, NewEJBGcount, PctChange)
 ```
 
-# Analysis of potential de-designation of Environmental Justice communities
-
 This analysis is an exploration of criteria for de-designation of Environmental Justice communities in Massachusetts.
 
 ## Environmental Justice community definition
@@ -161,7 +160,7 @@ education;
 * the neighborhood does not bear an unfair burden of environmental pollution; and 
 * the neighborhood has more than limited access to natural resources, including open spaces and water resources, playgrounds and other constructed outdoor recreational facilities and venues.
 
-### Opertionalizing de-designation criteria
+### Operationalizing de-designation criteria
 This analysis operationalizes the de-designation criteria in the following ways:
 
 * evaluation of potential de-designation is only applied to Census Block Groups that are designated as Environmental Justice communities under the EJ community definition;
@@ -175,7 +174,8 @@ Using the above criteria for de-designation, we find that `r maACS19_blkgrp %>% 
 
 The map shows current EJ-designated Block Groups. Toggle the De-designate layer to see de-designation candidates in red overlay. Click on any Block Group for more information.
 
-```{r mapEJ, warning=FALSE, message=FALSE}
+
+```{r mapEJ, warning=FALSE, message=FALSE, echo=FALSE}
 # create a polygon layer of EJ-only BGs
 maACS19_blkgrpEJ <- maACS19_blkgrp %>% 
   filter(EJ == "Yes")
@@ -225,7 +225,7 @@ DedesignatePopUp <- paste0(EJdedesignate_sf$NAME.y, "<br/>",
                                      digits = 0)))
 
 # draw the map of EJ Polygons according to Environmental Justice Policy. Faded red polygons represent block groups that potentially lose EJ status.
-leaflet() %>% 
+leaflet(width = "100%") %>% 
   addProviderTiles(providers$Stamen.TonerLite) %>% 
   addPolygons(data = maACS19_cosub,
               weight = 0.7,
@@ -278,7 +278,9 @@ leaflet() %>%
   hideGroup(c("De-designate"))
 ```
 
-```{r tabChange}
+
+The table below highlights the municipalities that would lose Environmental Justice Block Groups under the proposed de-designation policy. It shows the current number of EJ-designated Census Block Groups within the municipality, the number that would be lost by de-designation, the new number of EJ Block Groups after de-designation, and the percent change in the number of EJ-designated Block Groups. Click on a column heading to sort by that column.
+```{r tabChange, warning=FALSE, message=FALSE, echo=FALSE, fig.cap="Counts of Block Groups by Municipality by Environmental Justice Designation"}
 library(DT)
 # set common data table options
 # options(DT.options = list(scrollY="100vh", lengthMenu = c(5, 10, 15, 20)))
@@ -290,7 +292,7 @@ sketch1 = htmltools::withTags(table(
   thead(
     tr(
       th(rowspan = 1, 'City/Town'),
-      th(align="center", colspan = 1, 'EJ Cnt'),
+      th(align="center", colspan = 1, 'Current EJ Cnt'),
       th(align="center", colspan = 1, 'De-designate Cnt'),
       th(align="center", colspan = 1, 'New EJ Cnt'),
       th(align="center", colspan = 1, 'Pct Change')
