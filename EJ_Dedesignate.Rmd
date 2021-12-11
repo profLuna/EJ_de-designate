@@ -1,0 +1,285 @@
+---
+title: "EJ De-designation exploration"
+author: "Marcos Luna"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(tidycensus)
+library(sf)
+library(tigris)
+library(kableExtra)
+library(leaflet)
+library(leaflet.extras)
+library(gplots)
+
+# download variables at block group level for Massachusetts
+maACS19_blkgrp <- get_acs(geography = "block group", 
+                          variables = c(totalpop = "B03002_001", 
+                                        whitepop = "B03002_003", 
+                                        medhhinc = "B19013_001",
+                                        pop25 = "B15003_001",
+                                        bachelors25 = "B15003_022",
+                                        masters25 = "B15003_023",
+                                        professional25 = "B15003_024",
+                                        doctorate25 = "B15003_025",
+                                        households = "C16002_001",
+                                        limitSpan = "C16002_004",
+                                        limitIE = "C16002_007",
+                                        limitAPI = "C16002_010",
+                                        limitO = "C16002_013"),
+                          state = "MA", output = "wide")
+
+# create variables for EJ criteria
+maACS19_blkgrp <- maACS19_blkgrp %>% 
+  drop_na(totalpopE) %>% 
+  filter(totalpopE > 0) %>% 
+  mutate(minority = totalpopE - whitepopE, 
+         pct_minority = minority/totalpopE*100,
+         limitedEngHH = limitSpanE+limitIEE+limitAPIE+limitOE,
+         pct_limitedEngHH = limitedEngHH/householdsE*100,
+         college = bachelors25E+masters25E+professional25E+doctorate25E,
+         pct_college = college/pop25E*100)
+
+# download census block group polygons alone
+ma_blkgrps <- block_groups(state = "MA", cb = TRUE)
+
+# get county subdivisions with median HH income
+maACS19_cosub <- get_acs(geography = "county subdivision", 
+                         variables = c(MHHI = "B19013_001"), state = "MA",
+                         geometry = TRUE) %>% 
+  mutate(TOWN = str_extract(str_remove_all(NAME, " town| city| Town"), 
+                            "[^,]+"))
+
+# get statewide median household income
+maACS19_stateMHI <- get_acs(geography = "state", variables = "B19013_001",
+                            state = "MA") %>% 
+  select(estimate) %>% 
+  pull()
+
+# assign town name and MHHI to each block group
+ma_blkgrps <- maACS19_cosub %>% 
+  select(-NAME) %>% 
+  st_join(ma_blkgrps, ., largest = TRUE, left = FALSE) %>% 
+  rename(COSUB_MHHI = estimate)
+
+# join block group demographics to polygons
+maACS19_blkgrp <- ma_blkgrps %>% 
+  left_join(., maACS19_blkgrp, by = c("GEOID.x" = "GEOID"))
+
+# allocate EJ identifiers
+maACS19_blkgrp <- maACS19_blkgrp %>% 
+  mutate(MA_MHHI = maACS19_stateMHI,
+         BG_PCTMAHHI = medhhincE/MA_MHHI*100,
+         MUNIMHHI_PCTMAHHI = COSUB_MHHI/MA_MHHI*100,
+         MEDIANHHI = if_else(BG_PCTMAHHI <= 65, "I",""),
+         LIMITEDENGLISH = if_else(pct_limitedEngHH >= 25, "E",""),
+         MINORITY = if_else(pct_minority >= 40 | 
+                              (pct_minority >= 25 & 
+                                 MUNIMHHI_PCTMAHHI <= 150), "M", ""),
+         EJ = str_trim(gsub("NA","",if_else(MEDIANHHI == "I" | 
+                        LIMITEDENGLISH == "E" | 
+                        MINORITY == "M", "Yes", "No"))),
+         EJCRITERIA = str_squish(
+           str_trim(gsub
+                    ("NA","",
+             paste(MEDIANHHI, LIMITEDENGLISH, MINORITY, sep = " ")))),
+         EJCRITERIA_CNT = nchar(EJCRITERIA) - str_count(EJCRITERIA, " "))
+
+# Bring in EJSCREEN data to identify BGs that "not bear an unfair burden of environmental pollution"
+# download.file(url = "https://gaftp.epa.gov/EJSCREEN/2020/EJSCREEN_2020_StatePctile.csv.zip", 
+#               destfile = "EJSCREEN_2020_StatePctile.csv.zip")
+# 
+# unzip("EJSCREEN_2020_StatePctile.csv.zip")
+
+EJSCREEN_2020_StatePctile <- read_csv("EJSCREEN_2020_StatePctile.csv") %>% 
+  filter(STATE_NAME == "Massachusetts") %>% 
+  select(ID, P_PM25, P_OZONE, P_DSLPM, P_CANCR, P_RESP, P_PTRAF, P_LDPNT,
+         P_PNPL, P_PRMP, P_PTSDF, P_PWDIS)
+
+# join to maACS block groups
+maACS19_blkgrp <- maACS19_blkgrp %>% 
+  left_join(., EJSCREEN_2020_StatePctile, by = c("GEOID.x" = "ID"))
+
+# identify areas that meet EJ de-designation criteria, assuming 'unfair burden of environmental pollution' to mean greater than 50th percentile for any given type of pollution
+maACS19_blkgrp <- maACS19_blkgrp %>% 
+  mutate(EJ_ELIMINATE = if_else(EJ == "Yes" & 
+                                  BG_PCTMAHHI > 125 & 
+                                  pct_college > 50 & 
+                                  (P_PM25 < 90 & P_OZONE < 90 & 
+                                     P_DSLPM < 90 & P_CANCR < 90 & 
+                                     P_RESP < 90 & 
+                                     P_LDPNT < 90 & P_PWDIS < 90), 
+                                "Eliminate?", " "))
+
+# construct df of de-designation stats by town
+# number of EJ BGs by town
+EJBGcountTown <- maACS19_blkgrp %>% 
+  as.data.frame() %>% 
+  filter(EJ == "Yes") %>% 
+  group_by(TOWN) %>% 
+  summarize(EJBGcount = n())
+
+EJBGdedesigTown <- maACS19_blkgrp %>% 
+  as.data.frame() %>% 
+  filter(EJ == "Yes" & EJ_ELIMINATE == "Eliminate?") %>% 
+  group_by(TOWN) %>% 
+  summarize(EJdedesigBGcount = n())
+
+# Bring df together and calculate pct change
+EJBGdedesigDF <- left_join(EJBGdedesigTown, EJBGcountTown, by = "TOWN") %>% 
+  mutate(PctChange = round(EJdedesigBGcount/EJBGcount*-100,1),
+         NewEJBGcount = EJBGcount - EJdedesigBGcount) %>% 
+  select(TOWN, EJBGcount, EJdedesigBGcount, NewEJBGcount, PctChange)
+```
+
+# Analysis of potential de-designation of Environmental Justice communities
+
+This analysis is an exploration of criteria for de-designation of Environmental Justice communities in Massachusetts.
+
+## Environmental Justice community definition
+[Chapter 8 of the Acts of 2021: “An Act Creating a Next-Generation Roadmap for Massachusetts Climate Policy,”](https://www.mass.gov/doc/environmental-justice-policy6242021-update/download) defines an Environmental Justice community in Massachusetts as a neighborhood that meets 1 or more of the following criteria: 
+
+* the annual median household income is not more than 65 per cent of the statewide annual median household income; 
+* minorities comprise 40 per cent or more of the population; 
+* 25 per cent or more of households lack English language proficiency; or 
+* minorities comprise 25 per cent or more of the population and the annual median household income of the municipality in which the neighborhood is located does not exceed 150 per cent of the statewide annual median household income; or 
+* a geographic portion of a neighborhood designated by the Secretary as an environmental justice population in accordance with law.
+
+The definintion of Environmental Justice communities means that any Census Block Group meeting one or more of the above criteria qualifies as an Environmental Justice community. 
+
+## De-designation of Environmental Justice communities
+The same policy allows the Massachusetts Secretary of Energy and Environmental Affairs to de-designate a community as an Environmental Justice community if it is found that: 
+
+* the annual median household income of that neighborhood is greater than 125 per cent of the statewide median household income; 
+* a majority of persons age 25 and older in that neighborhood have a college
+education; 
+* the neighborhood does not bear an unfair burden of environmental pollution; and 
+* the neighborhood has more than limited access to natural resources, including open spaces and water resources, playgrounds and other constructed outdoor recreational facilities and venues.
+
+### Opertionalizing de-designation criteria
+This analysis operationalizes the de-designation criteria in the following ways:
+
+* evaluation of potential de-designation is only applied to Census Block Groups that are designated as Environmental Justice communities under the EJ community definition;
+* all data for comparison are derived from the American Community Survey 5-year estimates at the Census Block Group, Census County Subdivision (i.e., city or town), and State levels;
+* all of the de-designation criteria must be simultaneously true in order for a Census Block Group to be eligible for de-designation;
+* "majority ... have a college education" is interpreted to mean that greater than 50% of adults age 25 and older have completed a Bachelors, Professional, Masters, or Doctorate degree;
+* "an unfair burden of environmental pollution" is not defined in law or policy for the state of Massachusetts or the federal government. This analysis uses the [EPA's EJSCREEN data](https://www.epa.gov/ejscreen) on percentile concentrations of PM~2.5~, Ozone, Diesel Particulate Matter, Cancer Risk, Respiratory Hazard Risk, Lead Paint Exposure, and presence of major direct dischargers to waters within the community as measures of pollution burden. Block Groups with values at the 90th percentile or higher for any of these pollution types are considered to be unfairly burdened. A Block Group with a pollutant burden at the 90th percentile experiences pollutant levels that are higher than 90% of all other Block Groups within the state. In order for a Block Group to be **not unfairly burdened**, it must not exceed the 90th percentile for any of these pollutant burdens. 
+* "more than limited access to natural resources, including open spaces and water resources, playgrounds and other constructed outdoor recreational facilities and venues" is too vague and broad to be practically implemented across the state. This criterion is ignored for this analysis, but bears closer examination. 
+
+Using the above criteria for de-designation, we find that `r maACS19_blkgrp %>% filter(EJ_ELIMINATE == "Eliminate?") %>% nrow()` Block Groups currently designated as Environmental Justice communities may be eligible for de-designation (see map below). These potentially de-designatd Block Groups are spread across 31 municipalities (see table below). 
+
+```{r tabChange}
+
+```
+
+
+The map shows current EJ-designated Block Groups. Toggle the De-designate layer to see de-designation candidates in red overlay. Click on any Block Group for more information.
+
+```{r mapEJ, warning=FALSE, message=FALSE}
+# create a polygon layer of EJ-only BGs
+maACS19_blkgrpEJ <- maACS19_blkgrp %>% 
+  filter(EJ == "Yes")
+
+# create a polygon layer of EJ BGs eligible for de-designation
+EJdedesignate_sf <- maACS19_blkgrpEJ %>% 
+  filter(EJ_ELIMINATE == "Eliminate?")
+
+# set up color palette with colors in order of criteria, which are in alphabetical order by default
+# sort(unique(blkgrp_shp_WGS84_naEJCRIT2010EJCRIT2010$EJCRIT2010))# confirm order of criteria
+EJpal <- colorFactor(palette = c("lightskyblue","deeppink","cyan","navyblue","lawngreen","darkgreen","gold"),
+                     levels = c("E", "E M", "I E", "I E M", "I", "I M", "M"),
+                         domain = maACS19_blkgrpEJ$EJCRITERIA)
+
+# create vector colors in order to be used in legend
+EJcols <- c("gold","lawngreen","lightskyblue","darkgreen","deeppink","cyan","navyblue")
+# convert named colors to hexadecimal
+EJcolsHex <- col2hex(EJcols)
+
+# Create popup for EJ layer. NOTE THAT POPUP AND PALETTE MUST BE CREATED FROM EXACT SAME DF AS USED IN leaflet() MAP. OTHERWISE, POPUPS WILL SHOW UP IN THE WRONG LOCATION!
+EJPopUp <- paste0(maACS19_blkgrpEJ$NAME.y, "<br/>",
+                   "<b>Town:</b> ", maACS19_blkgrpEJ$TOWN, "<br/>",
+                   "<b>EJ Criteria Met:</b> ", maACS19_blkgrpEJ$EJCRITERIA, "<br/>",
+                   "<b>Minority: </b>", paste0(round(maACS19_blkgrpEJ$pct_minority,1),"%"),"<br/>",
+                   "<b>Median Household Income: </b>", paste0("$",formatC(round(maACS19_blkgrpEJ$medhhincE), big.mark = ",", format = "f", digits = 0)),"<br/>",
+                  "<b>Median Household Income as Pct of State MHHI: </b>",
+                  paste0(round(maACS19_blkgrpEJ$BG_PCTMAHHI,1),"%"),"<br/>",
+                   "<b>Limited English Households: </b>", paste0(round(maACS19_blkgrpEJ$pct_limitedEngHH,1),"%"), "<br/>",
+                  "This municipality has a median household income of ",
+                  paste0("$",formatC(round(maACS19_blkgrpEJ$COSUB_MHHI),
+                                     big.mark = ",", format = "f", 
+                                     digits = 0)))
+
+# Create a popup for de-designate layer
+DedesignatePopUp <- paste0(EJdedesignate_sf$NAME.y, "<br/>",
+                   "<b>Town:</b> ", EJdedesignate_sf$TOWN, "<br/>",
+                   "<b>EJ Criteria Met:</b> ", EJdedesignate_sf$EJCRITERIA, "<br/>",
+                   "<b>Minority: </b>", paste0(round(EJdedesignate_sf$pct_minority,1),"%"),"<br/>",
+                   "<b>Median Household Income: </b>", paste0("$",formatC(round(EJdedesignate_sf$medhhincE), big.mark = ",", format = "f", digits = 0)),"<br/>",
+                  "<b>Median Household Income as Pct of State MHHI: </b>",
+                  paste0(round(EJdedesignate_sf$BG_PCTMAHHI,1),"%"),"<br/>",
+                   "<b>Limited English Households: </b>", paste0(round(EJdedesignate_sf$pct_limitedEngHH,1),"%"), "<br/>",
+                  "<b>College educated: </b>", paste0(round(EJdedesignate_sf$pct_college,1),"%"), "<br/>",
+                  "This municipality has a median household income of ",
+                  paste0("$",formatC(round(EJdedesignate_sf$COSUB_MHHI),
+                                     big.mark = ",", format = "f", 
+                                     digits = 0)))
+
+# draw the map of EJ Polygons according to Environmental Justice Policy. Faded red polygons represent block groups that potentially lose EJ status.
+leaflet() %>% 
+  addProviderTiles(providers$Stamen.TonerLite) %>% 
+  addPolygons(data = maACS19_cosub,
+              weight = 0.7,
+              opacity = 1,
+              color = "gray",
+              fillOpacity = 0,
+              label=~TOWN, popup=~TOWN, group='muni') %>% 
+  addPolygons(data = EJdedesignate_sf,
+              fillColor = "red",
+              weight = 1,
+              opacity = 1,
+              color = "yellow",
+              dashArray = 3,
+              fillOpacity = 0.6,
+              label=~TOWN,
+              popup = DedesignatePopUp,
+              group = "De-designate",
+              highlight = highlightOptions(
+                weight = 5,
+                color = "yellow",
+                dashArray = "",
+                fillOpacity = 0.7,
+                bringToFront = TRUE)) %>% 
+  addPolygons(data = maACS19_blkgrpEJ,
+              fillColor = ~EJpal(EJCRITERIA), 
+              weight = 0.5,
+              opacity = 0.7,
+              color = "white",
+              dashArray = 3,
+              fillOpacity = 0.7,
+              label=~TOWN, 
+              popup = EJPopUp,
+              group = "EJ Communities",
+              highlight = highlightOptions(
+                weight = 5,
+                color = "#666",
+                dashArray = "",
+                fillOpacity = 0.7,
+                bringToFront = TRUE)) %>% 
+  addLegend(colors = EJcolsHex, 
+            labels = c("Minority","Income","English Isolation","Minority and Income","Minority and English Isolation","Income and English Isolation","Minority, Income, and English Isolation"), title = "Environmental Justice Populations", position = "bottomleft") %>% 
+  setView(lng = -72, 42.1, zoom = 8) %>% 
+  # addMiniMap() %>% 
+  addScaleBar(position = "bottomright") %>% 
+  addSearchFeatures(targetGroups  = 'muni', 
+                    options = searchFeaturesOptions(zoom=14, openPopup=TRUE, hideMarkerOnCollapse=T)) %>% 
+  addLayersControl(
+    overlayGroups = c("De-designate", "EJ Communities"),
+    options = layersControlOptions(collapsed = FALSE))%>% 
+  hideGroup(c("De-designate"))
+```
+
