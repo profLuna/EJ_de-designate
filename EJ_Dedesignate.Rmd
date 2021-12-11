@@ -132,7 +132,7 @@ EJBGdedesigTown <- maACS19_blkgrp %>%
 
 # Bring df together and calculate pct change
 EJBGdedesigDF <- left_join(EJBGdedesigTown, EJBGcountTown, by = "TOWN") %>% 
-  mutate(PctChange = round(EJdedesigBGcount/EJBGcount*-100,1),
+  mutate(PctChange = round(EJdedesigBGcount/EJBGcount*-1,1),
          NewEJBGcount = EJBGcount - EJdedesigBGcount) %>% 
   select(TOWN, EJBGcount, EJdedesigBGcount, NewEJBGcount, PctChange)
 ```
@@ -172,11 +172,6 @@ This analysis operationalizes the de-designation criteria in the following ways:
 * "more than limited access to natural resources, including open spaces and water resources, playgrounds and other constructed outdoor recreational facilities and venues" is too vague and broad to be practically implemented across the state. This criterion is ignored for this analysis, but bears closer examination. 
 
 Using the above criteria for de-designation, we find that `r maACS19_blkgrp %>% filter(EJ_ELIMINATE == "Eliminate?") %>% nrow()` Block Groups currently designated as Environmental Justice communities may be eligible for de-designation (see map below). These potentially de-designatd Block Groups are spread across 31 municipalities (see table below). 
-
-```{r tabChange}
-
-```
-
 
 The map shows current EJ-designated Block Groups. Toggle the De-designate layer to see de-designation candidates in red overlay. Click on any Block Group for more information.
 
@@ -283,3 +278,29 @@ leaflet() %>%
   hideGroup(c("De-designate"))
 ```
 
+```{r tabChange}
+library(DT)
+# set common data table options
+# options(DT.options = list(scrollY="100vh", lengthMenu = c(5, 10, 15, 20)))
+options(DT.options = list(lengthMenu = c(10, 20, 50)))
+
+# create object to hold complex headers for table
+sketch1 = htmltools::withTags(table(
+  class = 'display',
+  thead(
+    tr(
+      th(rowspan = 1, 'City/Town'),
+      th(align="center", colspan = 1, 'EJ Cnt'),
+      th(align="center", colspan = 1, 'De-designate Cnt'),
+      th(align="center", colspan = 1, 'New EJ Cnt'),
+      th(align="center", colspan = 1, 'Pct Change')
+    )
+  )
+))
+
+EJBGdedesigDF %>% 
+  arrange(TOWN) %>% 
+  datatable(., rownames = FALSE, options = list(pageLength = 10), 
+            container = sketch1) %>%
+  formatPercentage(., columns = 5)
+```
