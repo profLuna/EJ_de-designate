@@ -12,6 +12,10 @@ library(tidycensus)
 library(sf)
 library(tigris)
 library(tmap)
+
+
+
+
 v19 <- load_variables(year = 2019, dataset = "acs5")
 
 # download variables at block group level for Massachusetts
@@ -31,7 +35,7 @@ maACS19_blkgrp <- get_acs(geography = "block group",
                                         limitO = "C16002_013"),
                           state = "MA", output = "wide")
 
-# create variables for criteria
+# create variables for EJ criteria
 maACS19_blkgrp <- maACS19_blkgrp %>% 
   drop_na(totalpopE) %>% 
   filter(totalpopE > 0) %>% 
@@ -61,7 +65,8 @@ ma_blkgrps <- ma_blkgrps %>%
   select(-NAME) %>% 
   st_join(., maACS19_cosub, largest = TRUE, left = FALSE) %>% 
   rename(COSUB_MHHI = estimate) %>% 
-  mutate(TOWN = str_extract(str_remove_all(NAME, " town| city"), "[^,]+"))
+  mutate(TOWN = str_extract(str_remove_all(NAME, " town| city| Town"), 
+                            "[^,]+"))
 
 # join block group demographics to polygons
 maACS19_blkgrp <- ma_blkgrps %>% 
@@ -116,12 +121,26 @@ maACS19_blkgrp <- maACS19_blkgrp %>%
                                   pct_college > 50 & 
                                   (P_PM25 < 90 & P_OZONE < 90 & 
                                      P_DSLPM < 90 & P_CANCR < 90 & 
-                                     P_RESP < 90 & P_PTRAF < 90 & 
+                                     P_RESP < 90 & 
                                      P_LDPNT < 90 & P_PWDIS < 90), 
                                 "Eliminate?", " "))
+# save work
+save(ma_blkgrps, maACS19_blkgrp, maACS19_cosub, EJSCREEN_2020_StatePctile, 
+     file = "maACSblkgrps.Rds")
+# reload work
+load("maACSblkgrps.Rds")
+
 
 # How many potentially eliminated?
 maACS19_blkgrp %>% filter(EJ_ELIMINATE == "Eliminate?") %>% nrow()
+
+# How many de-designated by town?
+maACS19_blkgrp %>% 
+  as.data.frame() %>% 
+  filter(EJ_ELIMINATE == "Eliminate?" & EJ == "Yes") %>% 
+  group_by(TOWN) %>% 
+  summarize(COUNT = n()) %>% 
+  arrange(-COUNT)
 
 # Look more closely at certain municipalities
 # How many EJ BGs in Arlington?
@@ -136,6 +155,7 @@ maACS19_blkgrp %>%
   filter(TOWN == "Arlington" & EJ_ELIMINATE == "Eliminate?") %>%
   nrow()
 
+# peruse relevant variables to see spread of values in each
 maACS19_blkgrp %>% 
   as.data.frame() %>% 
   filter(TOWN == "Arlington") %>% 
@@ -143,9 +163,18 @@ maACS19_blkgrp %>%
          P_PRMP, P_PTSDF, P_PWDIS) %>%
   head(50)
 
+maACS19_blkgrp %>% 
+  as.data.frame() %>% 
+  filter(TOWN == "Arlington") %>% 
+  select(TOWN, P_PM25, P_OZONE, P_DSLPM, P_CANCR, P_RESP, P_PTRAF, P_LDPNT, P_PNPL,
+         P_PRMP, P_PTSDF, P_PWDIS) %>%
+  group_by(TOWN) %>% 
+  summarize(across(P_PM25:P_PWDIS, ~ max(.x, na.rm = T)))
+
 # map it out
 library(tmap)
 tmap_mode("view")
 maACS19_blkgrp %>% 
   filter(EJ_ELIMINATE == "Eliminate?") %>% 
   tm_shape(.) + tm_fill(col = "red", alpha = 0.6)
+
